@@ -3,19 +3,10 @@ from typing import List, Optional
 
 # 2+ spaces = column separators in aligned text reports
 MULTISPACE = re.compile(r"\s{2,}")
+
 DOB_GENDER_DL = re.compile(r"^(?P<dob>\d{8})(?P<gender>[MF])(?P<dl>.+)$")
 
 def split_columns(line: str) -> List[str]:
-
-def find_anchor_index(tokens: List[str]) -> Optional[int]:
-    """
-    Returns the index of the token that matches the DOB+Gender+DriverLicense pattern.
-    If not found, returns None.
-    """
-    for i, token in enumerate(tokens):
-        if DOB_GENDER_DL.match(token):
-            return i
-    return None
     """
     Split one aligned-text line into tokens using 2+ spaces as separators.
 
@@ -26,8 +17,15 @@ def find_anchor_index(tokens: List[str]) -> Optional[int]:
     Returns:
         List of non-empty, stripped tokens.
     """
-    # Remove only the newline at the end; keep internal spacing intact
     line = line.rstrip("\n")
+    return [t.strip() for t in MULTISPACE.split(line) if t.strip()]
 
-    tokens = [t.strip() for t in MULTISPACE.split(line) if t.strip()]
-    return tokens
+def find_anchor_index(tokens: List[str]) -> Optional[int]:
+    """
+    Returns the index of the token that matches the DOB+Gender+DriverLicense pattern.
+    If not found, returns None.
+    """
+    for i, token in enumerate(tokens):
+        if DOB_GENDER_DL.match(token):
+            return i
+    return None
