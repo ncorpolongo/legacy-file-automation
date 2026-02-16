@@ -1,7 +1,7 @@
 from parser import parse_file
 
 if __name__ == "__main__":
-    records, errors = parse_file("data/0212026 (mock dailfy file).txt")
+    records, errors = parse_file("data/mock_daily_file_v2.txt")
 
     print(f"Records: {len(records)}")
     print(f"Errors: {len(errors)}")
