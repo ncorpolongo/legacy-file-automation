@@ -8,7 +8,7 @@ MULTISPACE = re.compile(r"\s{2,}")
 DOB_GENDER_DL = re.compile(r"^(?P<dob>\d{8})(?P<gender>[MF])(?P<dl>.+)$")
 
 # State + zip (supports ZIP or ZIP+4); works for IL/WI/IN/etc.
-STATE_ZIP = re.compile(r"^(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$")
+STATE_ZIP = re.compile(r"^(?P<state>[A-Z]{2})\s*(?P<zip>\d{5}(?:-\d{4})?)$")
 
 
 def split_columns(line: str) -> List[str]:
