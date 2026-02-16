@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 
 # 2+ spaces = column separators in aligned text reports
@@ -120,6 +121,7 @@ def parse_left_side(left_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], O
         "state": state,
         "zip": zip_code,
     }, None
+
 def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[str, str]]]:
     """
     Parse one raw line into a structured record.
@@ -162,8 +164,13 @@ def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[st
         "right_tokens": right_tokens,
     })
 
+    right_data, right_err = parse_right_side(right_tokens)
+    if right_err:
+        right_err["raw"] = line.rstrip("\n")
+        return None, right_err
+    record.update(right_data)
+
     return record, None
-from pathlib import Path
 
 def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, str]]]:
     """
@@ -189,3 +196,66 @@ def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, 
             records.append(rec)
 
     return records, errors
+
+RIGHT_CASE_PREFIX = re.compile(r"^(?P<state>[A-Z]{2})(?P<year>\d{2})(?P<charge>[A-Z]{2})(?P<seq>\d{8})")
+
+EIGHT_DIGIT_DATE = re.compile(r"\d{8}$")  # for quick checks
+ALL_DATES = re.compile(r"\d{8}")
+
+def parse_right_side(right_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, str]]]:
+    """
+    Parse right-side tokens into case metadata.
+    Returns (data, error).
+    """
+    if not right_tokens:
+        return None, {"reason": "Missing right-side tokens"}
+
+    # Often the last token is the 16-char tail id
+    tail_id = right_tokens[-1]
+    composite = "".join(right_tokens[:-1]) if len(right_tokens) > 1 else right_tokens[0]
+
+    data: Dict[str, str] = {"tail_id": tail_id}
+
+    m = RIGHT_CASE_PREFIX.match(composite)
+    if not m:
+        return None, {"reason": "Could not parse case prefix", "composite": composite, "tail_id": tail_id}
+
+    data.update({
+        "case_state": m.group("state"),
+        "case_year": m.group("year"),
+        "charge_code": m.group("charge"),
+        "case_seq": m.group("seq"),
+        "case_number": m.group(0),  # full prefix, e.g., IL25TR00004567
+    })
+
+    rest = composite[len(m.group(0)):]  # everything after the case prefix
+
+    # Status/program code is typically last 12 chars (your spec)
+    status_code = ""
+    if len(rest) >= 12:
+        status_code = rest[-12:]
+        rest_before_status = rest[:-12]
+    else:
+        rest_before_status = rest
+
+    data["status_code"] = status_code
+
+    # Extract all 8-digit date strings from rest_before_status
+    dates = ALL_DATES.findall(rest_before_status)
+    data["dates_found"] = ",".join(dates)
+
+    # Branch code = letters at the start before the first digit (robust)
+    first_digit_i = None
+    for i, ch in enumerate(rest_before_status):
+        if ch.isdigit():
+            first_digit_i = i
+            break
+
+    if first_digit_i is None:
+        branch_code = rest_before_status
+    else:
+        branch_code = rest_before_status[:first_digit_i]
+
+    data["branch_code"] = branch_code
+
+    return data, None
