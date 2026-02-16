@@ -163,3 +163,29 @@ def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[st
     })
 
     return record, None
+from pathlib import Path
+
+def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, str]]]:
+    """
+    Parse a whole daily file.
+
+    Returns:
+        (records, errors)
+    """
+    records: List[Dict[str, object]] = []
+    errors: List[Dict[str, str]] = []
+
+    path = Path(file_path)
+    for line_number, line in enumerate(path.open("r", encoding="utf-8"), start=1):
+        if not line.strip():
+            continue
+
+        rec, err = parse_line(line)
+        if err:
+            err["line_number"] = str(line_number)
+            errors.append(err)
+        else:
+            rec["line_number"] = line_number
+            records.append(rec)
+
+    return records, errors
