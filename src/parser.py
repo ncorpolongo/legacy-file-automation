@@ -1,10 +1,10 @@
 import re
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
 
 # 2+ spaces = column separators in aligned text reports
 MULTISPACE = re.compile(r"\s{2,}")
-
 DOB_GENDER_DL = re.compile(r"^(?P<dob>\d{8})(?P<gender>[MF])(?P<dl>.+)$")
+STATE_ZIP = re.compile(r"^(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$")
 
 def split_columns(line: str) -> List[str]:
     """
@@ -29,3 +29,96 @@ def find_anchor_index(tokens: List[str]) -> Optional[int]:
         if DOB_GENDER_DL.match(token):
             return i
     return None
+
+
+def parse_left_side(left_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, str]]]:
+    """
+    Parse left-side tokens into identity/address fields.
+
+    Expected (conceptually):
+        last_name, first_name, address1, [address2], city, state_zip
+
+    But addresses vary, so we anchor on state+zip and work backwards.
+    Returns:
+        (data, error)
+    """
+    if len(left_tokens) < 5:
+        return None, {
+            "reason": f"Not enough left-side tokens (got {len(left_tokens)})",
+            "left_tokens": " | ".join(left_tokens),
+        }
+
+    # 1) Find state+zip token scanning from right
+    state_zip_i = None
+    for i in range(len(left_tokens) - 1, -1, -1):
+        if STATE_ZIP.match(left_tokens[i]):
+            state_zip_i = i
+            break
+
+    if state_zip_i is None:
+        return None, {
+            "reason": "Could not find state+zip token on left side",
+            "left_tokens": " | ".join(left_tokens),
+        }
+
+    if state_zip_i < 2:
+        return None, {
+            "reason": "State+zip found too early to parse name/address/city",
+            "left_tokens": " | ".join(left_tokens),
+        }
+
+    city_i = state_zip_i - 1
+    city = left_tokens[city_i]
+    state_zip = left_tokens[state_zip_i]
+
+    last_name = left_tokens[0]
+    first_name = left_tokens[1]
+
+    address_tokens = left_tokens[2:city_i]
+
+    # Address rules
+    address1 = ""
+    address2 = ""
+
+    if len(address_tokens) == 0:
+        return None, {
+            "reason": "Missing address tokens",
+            "left_tokens": " | ".join(left_tokens),
+        }
+    elif len(address_tokens) == 1:
+        address1 = address_tokens[0]
+    elif len(address_tokens) == 2:
+        address1, address2 = address_tokens
+    else:
+        # Rare: more than 2 address-like tokens.
+        # Keep it predictable: last token becomes address2, rest combined into address1.
+        address1 = " ".join(address_tokens[:-1])
+        address2 = address_tokens[-1]
+
+    # Optional fallback: if address2 is blank but address1 contains apt/unit markers
+    if not address2:
+        upper = address1.upper()
+        markers = [" APT ", " APARTMENT ", " UNIT ", " STE ", " SUITE ", " #"]
+        for marker in markers:
+            idx = upper.find(marker)
+            if idx != -1:
+                address2 = address1[idx:].strip()
+                address1 = address1[:idx].strip()
+                break
+
+    # Also split state and zip for convenience later
+    m = STATE_ZIP.match(state_zip)
+    assert m is not None
+    state = m.group("state")
+    zip_code = m.group("zip")
+
+    return {
+        "last_name": last_name,
+        "first_name": first_name,
+        "address1": address1,
+        "address2": address2,
+        "city": city,
+        "state": state,
+        "zip": zip_code,
+    }, None
+
