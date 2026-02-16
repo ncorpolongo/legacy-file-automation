@@ -11,6 +11,27 @@ DOB_GENDER_DL = re.compile(r"^(?P<dob>\d{8})(?P<gender>[MF])(?P<dl>.+)$")
 # State + zip (supports ZIP or ZIP+4); works for IL/WI/IN/etc.
 STATE_ZIP = re.compile(r"^(?P<state>[A-Z]{2})\s*(?P<zip>\d{5}(?:-\d{4})?)$")
 
+def parse_yymmddcc(date8: str) -> Optional[str]:
+    """
+    Convert custom 8-digit date format YYMMDDCC to ISO YYYY-MM-DD.
+    Example: 26021220 -> 2026-02-12
+    """
+    if not date8 or len(date8) != 8 or not date8.isdigit():
+        return None
+
+    yy = date8[0:2]
+    mm = date8[2:4]
+    dd = date8[4:6]
+    cc = date8[6:8]
+
+    year = int(cc + yy)
+    month = int(mm)
+    day = int(dd)
+
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+
+    return f"{year:04d}-{month:02d}-{day:02d}"
 
 def split_columns(line: str) -> List[str]:
     """
@@ -122,6 +143,76 @@ def parse_left_side(left_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], O
         "zip": zip_code,
     }, None
 
+RIGHT_CASE_PREFIX = re.compile(r"^(?P<state>[A-Z]{2})(?P<year>\d{2})(?P<charge>[A-Z]{2})(?P<seq>\d{8})")
+ALL_DATES = re.compile(r"\d{8}")
+
+def parse_right_side(right_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, str]]]:
+    """
+    Parse right-side tokens into case metadata.
+    Returns (data, error).
+    """
+    if not right_tokens:
+        return None, {"reason": "Missing right-side tokens"}
+
+    # Often the last token is the 16-char tail id
+    tail_id = right_tokens[-1]
+    composite = "".join(right_tokens[:-1]) if len(right_tokens) > 1 else right_tokens[0]
+
+    data: Dict[str, str] = {"tail_id": tail_id}
+
+    m = RIGHT_CASE_PREFIX.match(composite)
+    if not m:
+        return None, {"reason": "Could not parse case prefix", "composite": composite, "tail_id": tail_id}
+
+    data.update({
+        "case_state": m.group("state"),
+        "case_year": m.group("year"),
+        "charge_code": m.group("charge"),
+        "case_seq": m.group("seq"),
+        "case_number": m.group(0),  # full prefix, e.g., IL25TR00004567
+    })
+
+    rest = composite[len(m.group(0)):]  # everything after the case prefix
+
+    # Status/program code is typically last 12 chars (your spec)
+    status_code = ""
+    if len(rest) >= 12:
+        status_code = rest[-12:]
+        rest_before_status = rest[:-12]
+    else:
+        rest_before_status = rest
+
+    data["status_code"] = status_code
+
+    # Extract all 8-digit date strings from rest_before_status
+    dates = ALL_DATES.findall(rest_before_status)
+
+    # first date = sentencing, second date = supervision end
+    sentencing_raw = dates[0] if len(dates) >= 1 else ""
+    supervision_end_raw = dates[1] if len(dates) >= 2 else ""
+
+    data["sentencing_date_raw"] = sentencing_raw
+    data["supervision_end_date_raw"] = supervision_end_raw
+
+    data["sentencing_date"] = parse_yymmddcc(sentencing_raw) if sentencing_raw else None
+    data["supervision_end_date"] = parse_yymmddcc(supervision_end_raw) if supervision_end_raw else None
+
+    # Branch code = letters at the start before the first digit (robust)
+    first_digit_i = None
+    for i, ch in enumerate(rest_before_status):
+        if ch.isdigit():
+            first_digit_i = i
+            break
+
+    if first_digit_i is None:
+        branch_code = rest_before_status
+    else:
+        branch_code = rest_before_status[:first_digit_i]
+
+    data["branch_code"] = branch_code
+
+    return data, None
+    
 def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[str, str]]]:
     """
     Parse one raw line into a structured record.
@@ -167,6 +258,7 @@ def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[st
     right_data, right_err = parse_right_side(right_tokens)
     if right_err:
         right_err["raw"] = line.rstrip("\n")
+        right_err["right_tokens"] = " | ".join(right_tokens)
         return None, right_err
     record.update(right_data)
 
@@ -197,65 +289,8 @@ def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, 
 
     return records, errors
 
-RIGHT_CASE_PREFIX = re.compile(r"^(?P<state>[A-Z]{2})(?P<year>\d{2})(?P<charge>[A-Z]{2})(?P<seq>\d{8})")
 
-EIGHT_DIGIT_DATE = re.compile(r"\d{8}$")  # for quick checks
-ALL_DATES = re.compile(r"\d{8}")
 
-def parse_right_side(right_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, str]]]:
-    """
-    Parse right-side tokens into case metadata.
-    Returns (data, error).
-    """
-    if not right_tokens:
-        return None, {"reason": "Missing right-side tokens"}
 
-    # Often the last token is the 16-char tail id
-    tail_id = right_tokens[-1]
-    composite = "".join(right_tokens[:-1]) if len(right_tokens) > 1 else right_tokens[0]
 
-    data: Dict[str, str] = {"tail_id": tail_id}
 
-    m = RIGHT_CASE_PREFIX.match(composite)
-    if not m:
-        return None, {"reason": "Could not parse case prefix", "composite": composite, "tail_id": tail_id}
-
-    data.update({
-        "case_state": m.group("state"),
-        "case_year": m.group("year"),
-        "charge_code": m.group("charge"),
-        "case_seq": m.group("seq"),
-        "case_number": m.group(0),  # full prefix, e.g., IL25TR00004567
-    })
-
-    rest = composite[len(m.group(0)):]  # everything after the case prefix
-
-    # Status/program code is typically last 12 chars (your spec)
-    status_code = ""
-    if len(rest) >= 12:
-        status_code = rest[-12:]
-        rest_before_status = rest[:-12]
-    else:
-        rest_before_status = rest
-
-    data["status_code"] = status_code
-
-    # Extract all 8-digit date strings from rest_before_status
-    dates = ALL_DATES.findall(rest_before_status)
-    data["dates_found"] = ",".join(dates)
-
-    # Branch code = letters at the start before the first digit (robust)
-    first_digit_i = None
-    for i, ch in enumerate(rest_before_status):
-        if ch.isdigit():
-            first_digit_i = i
-            break
-
-    if first_digit_i is None:
-        branch_code = rest_before_status
-    else:
-        branch_code = rest_before_status[:first_digit_i]
-
-    data["branch_code"] = branch_code
-
-    return data, None
