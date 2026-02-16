@@ -120,3 +120,46 @@ def parse_left_side(left_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], O
         "state": state,
         "zip": zip_code,
     }, None
+def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[str, str]]]:
+    """
+    Parse one raw line into a structured record.
+
+    Returns:
+        (record, error)
+    """
+    tokens = split_columns(line)
+
+    anchor_i = find_anchor_index(tokens)
+    if anchor_i is None:
+        return None, {
+            "reason": "Missing DOB/Gender/DL anchor token",
+            "raw": line.rstrip("\n"),
+            "tokens": " | ".join(tokens),
+        }
+
+    left_tokens = tokens[:anchor_i]
+    anchor_token = tokens[anchor_i]
+    right_tokens = tokens[anchor_i + 1:]
+
+    left_data, left_err = parse_left_side(left_tokens)
+    if left_err:
+        left_err["raw"] = line.rstrip("\n")
+        return None, left_err
+
+    m = DOB_GENDER_DL.match(anchor_token)
+    if not m:
+        return None, {
+            "reason": "Anchor token did not match DOB/Gender/DL pattern",
+            "raw": line.rstrip("\n"),
+            "anchor_token": anchor_token,
+        }
+
+    record: Dict[str, object] = dict(left_data)
+    record.update({
+        "dob_raw": m.group("dob"),
+        "gender": m.group("gender"),
+        "driver_license": m.group("dl").strip(),
+        "right_tokens": right_tokens,
+    })
+
+    return record, None
