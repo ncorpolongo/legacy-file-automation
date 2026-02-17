@@ -289,6 +289,30 @@ def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, 
 
     return records, errors
 
+import csv
+
+def export_records_to_csv(records: List[Dict[str, object]], output_path: str) -> None:
+    if not records:
+        return
+
+    fieldnames = list(records[0].keys())
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(records)
+
+
+def export_errors_to_csv(errors: List[Dict[str, str]], output_path: str) -> None:
+    if not errors:
+        return
+
+    fieldnames = list(errors[0].keys())
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(errors)
 
 
 
