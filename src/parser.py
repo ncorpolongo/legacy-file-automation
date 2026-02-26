@@ -1,6 +1,20 @@
 import re
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
+import csv
+
+FIELDNAMES = [
+    "last_name", "first_name", "address1", "address2", "city", "state", "zip",
+    "dob_raw", "gender", "driver_license",
+    "case_number", "case_state", "case_year", "case_type", "case_seq",
+    "branch", "municipality",
+    "offense_date_raw", "offense_date",
+    "supervision_end_date_raw", "supervision_end_date",
+    "charge_code", "sentence_type", "course_length",
+    "tail_id",
+    "line_number",
+]
+
 
 # 2+ spaces = column separators in aligned text reports
 MULTISPACE = re.compile(r"\s{2,}")
@@ -10,6 +24,23 @@ DOB_GENDER_DL = re.compile(r"^(?P<dob>\d{8})(?P<gender>[MF])(?P<dl>.+)$")
 
 # State + zip (supports ZIP or ZIP+4); works for IL/WI/IN/etc.
 STATE_ZIP = re.compile(r"^(?P<state>[A-Z]{2})\s*(?P<zip>\d{5}(?:-\d{4})?)$")
+
+# Case prefix: e.g., IL25TR00001234
+RIGHT_CASE_PREFIX = re.compile(
+    r"^(?P<state>[A-Z]{2})(?P<year>\d{2})(?P<case_type>[A-Z]{2})(?P<seq>\d{8})"
+)
+
+# Tail after the prefix:
+# branch(2) + municipality(3-4) + offense(8) + supervision(8) + charge_code(3-4) + sentence_type(4) + course_length(2)
+RIGHT_TAIL = re.compile(
+    r"^(?P<branch>[A-Z]{2})"
+    r"(?P<municipality>[A-Z]{3,4})"
+    r"(?P<offense>\d{8})"
+    r"(?P<supervision>\d{8})"
+    r"(?P<charge_code>[A-Z]{3,5})"
+    r"(?P<sentence_type>[A-Z]{3,4})"
+    r"(?P<course_length>\d{2})$"
+)
 
 def parse_yymmddcc(date8: str) -> Optional[str]:
     """
@@ -49,10 +80,6 @@ def split_columns(line: str) -> List[str]:
 
 
 def find_anchor_index(tokens: List[str]) -> Optional[int]:
-    """
-    Returns the index of the token that matches the DOB+Gender+DriverLicense pattern.
-    If not found, returns None.
-    """
     for i, token in enumerate(tokens):
         if DOB_GENDER_DL.match(token):
             return i
@@ -143,73 +170,71 @@ def parse_left_side(left_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], O
         "zip": zip_code,
     }, None
 
-RIGHT_CASE_PREFIX = re.compile(r"^(?P<state>[A-Z]{2})(?P<year>\d{2})(?P<charge>[A-Z]{2})(?P<seq>\d{8})")
+RIGHT_CASE_PREFIX = re.compile(
+    r"^(?P<state>[A-Z]{2})(?P<year>\d{2})(?P<charge>[A-Z]{2})(?P<seq>\d{8})"
+)
+
 ALL_DATES = re.compile(r"\d{8}")
 
-def parse_right_side(right_tokens: List[str]) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, str]]]:
+
+def parse_right_side(right_tokens: List[str]) -> Tuple[Optional[Dict[str, object]], Optional[Dict[str, str]]]:
     """
-    Parse right-side tokens into case metadata.
-    Returns (data, error).
+    Parse right-side tokens into interface-aligned case fields.
+
+    Expected:
+      - last token = tail_id
+      - everything before tail_id = composite string with prefix + tail
     """
     if not right_tokens:
         return None, {"reason": "Missing right-side tokens"}
 
-    # Often the last token is the 16-char tail id
     tail_id = right_tokens[-1]
     composite = "".join(right_tokens[:-1]) if len(right_tokens) > 1 else right_tokens[0]
 
-    data: Dict[str, str] = {"tail_id": tail_id}
-
     m = RIGHT_CASE_PREFIX.match(composite)
     if not m:
-        return None, {"reason": "Could not parse case prefix", "composite": composite, "tail_id": tail_id}
+        return None, {
+            "reason": "Could not parse case prefix",
+            "composite": composite,
+            "tail_id": tail_id,
+        }
 
-    data.update({
-        "case_state": m.group("state"),
-        "case_year": m.group("year"),
-        "charge_code": m.group("charge"),
-        "case_seq": m.group("seq"),
-        "case_number": m.group(0),  # full prefix, e.g., IL25TR00004567
-    })
+    case_prefix = m.group(0)  # full case number
+    rest = composite[len(case_prefix):]
 
-    rest = composite[len(m.group(0)):]  # everything after the case prefix
+    mt = RIGHT_TAIL.match(rest)
+    if not mt:
+        return None, {
+            "reason": "Could not parse right-side tail after case prefix",
+            "case_number": case_prefix,
+            "rest": rest,
+            "tail_id": tail_id,
+        }
 
-    # Status/program code is typically last 12 chars (your spec)
-    status_code = ""
-    if len(rest) >= 12:
-        status_code = rest[-12:]
-        rest_before_status = rest[:-12]
-    else:
-        rest_before_status = rest
+    offense_raw = mt.group("offense")
+    supervision_raw = mt.group("supervision")
 
-    data["status_code"] = status_code
+    data: Dict[str, object] = {
+        "case_number": case_prefix,
+        "branch": mt.group("branch"),
+        "municipality": mt.group("municipality"),
+        "offense_date": parse_yymmddcc(offense_raw),
+        "supervision_end_date": parse_yymmddcc(supervision_raw),
+        "charge_code": mt.group("charge_code"),
+        "sentence_type": mt.group("sentence_type"),
+        "course_length": mt.group("course_length"),
+        "tail_id": tail_id,
+    }
 
-    # Extract all 8-digit date strings from rest_before_status
-    dates = ALL_DATES.findall(rest_before_status)
-
-    # first date = sentencing, second date = supervision end
-    sentencing_raw = dates[0] if len(dates) >= 1 else ""
-    supervision_end_raw = dates[1] if len(dates) >= 2 else ""
-
-    data["sentencing_date_raw"] = sentencing_raw
-    data["supervision_end_date_raw"] = supervision_end_raw
-
-    data["sentencing_date"] = parse_yymmddcc(sentencing_raw) if sentencing_raw else None
-    data["supervision_end_date"] = parse_yymmddcc(supervision_end_raw) if supervision_end_raw else None
-
-    # Branch code = letters at the start before the first digit (robust)
-    first_digit_i = None
-    for i, ch in enumerate(rest_before_status):
-        if ch.isdigit():
-            first_digit_i = i
-            break
-
-    if first_digit_i is None:
-        branch_code = rest_before_status
-    else:
-        branch_code = rest_before_status[:first_digit_i]
-
-    data["branch_code"] = branch_code
+    # Optional safety: if the date conversion failed, treat it as an error
+    if data["offense_date"] is None or data["supervision_end_date"] is None:
+        return None, {
+            "reason": "Invalid offense/supervision date format",
+            "case_number": case_prefix,
+            "offense_raw": offense_raw,
+            "supervision_raw": supervision_raw,
+            "tail_id": tail_id,
+        }
 
     return data, None
     
@@ -249,10 +274,9 @@ def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[st
 
     record: Dict[str, object] = dict(left_data)
     record.update({
-        "dob_raw": m.group("dob"),
-        "gender": m.group("gender"),
-        "driver_license": m.group("dl").strip(),
-        "right_tokens": right_tokens,
+    "dob_raw": m.group("dob"),
+    "gender": m.group("gender"),
+    "driver_license": m.group("dl").strip(),
     })
 
     right_data, right_err = parse_right_side(right_tokens)
@@ -289,7 +313,6 @@ def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, 
 
     return records, errors
 
-import csv
 
 def export_records_to_csv(records: List[Dict[str, object]], output_path: str) -> None:
     if not records:
@@ -307,10 +330,8 @@ def export_errors_to_csv(errors: List[Dict[str, str]], output_path: str) -> None
     if not errors:
         return
 
-    fieldnames = list(errors[0].keys())
-
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(errors)
 
