@@ -21,6 +21,8 @@ MULTISPACE = re.compile(r"\s{2,}")
 
 # Anchor token: 8 digits DOB + M/F + rest is driver's license
 DOB_GENDER_DL = re.compile(r"^(?P<dob>\d{8})(?P<gender>[MF])(?P<dl>.+)$")
+DOB_GENDER_DL_EMBEDDED = re.compile(r"(?P<dob>\d{8})(?P<gender>[MF])(?P<dl>[A-Z]\d{10})")
+DL_STRICT = re.compile(r"^[A-Z]\d{10}$")
 
 # State + zip (supports ZIP or ZIP+4); works for IL/WI/IN/etc.
 STATE_ZIP = re.compile(r"^(?P<state>[A-Z]{2})\s*(?P<zip>\d{5}(?:-\d{4})?)$")
@@ -247,6 +249,24 @@ def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[st
     """
     tokens = split_columns(line)
 
+    # Hardening: sometimes the anchor (DOB+Gender+DL) is stuck to another token
+    # (e.g., "IL60602-1234 06092220FC2468013579"). If so, split it out.
+    normalized_tokens: List[str] = []
+    for token in tokens:
+        m_embedded = DOB_GENDER_DL_EMBEDDED.search(token)
+        if m_embedded and not DOB_GENDER_DL.match(token.strip()):
+            start = m_embedded.start()
+            left_part = token[:start].strip()
+            anchor_part = token[start:].strip()
+            if left_part:
+                normalized_tokens.append(left_part)
+            if anchor_part:
+                normalized_tokens.append(anchor_part)
+        else:
+            normalized_tokens.append(token)
+
+    tokens = [t for t in normalized_tokens if t]
+
     anchor_i = find_anchor_index(tokens)
     if anchor_i is None:
         return None, {
@@ -272,11 +292,19 @@ def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[st
             "anchor_token": anchor_token,
         }
 
+    dl = m.group("dl").strip()
+    if not DL_STRICT.match(dl):
+        return None, {
+            "reason": "Invalid driver license format (expected 1 letter + 10 digits)",
+            "raw": line.rstrip("\n"),
+            "driver_license": dl,
+        }
+
     record: Dict[str, object] = dict(left_data)
     record.update({
-    "dob_raw": m.group("dob"),
-    "gender": m.group("gender"),
-    "driver_license": m.group("dl").strip(),
+        "dob_raw": m.group("dob"),
+        "gender": m.group("gender"),
+        "driver_license": dl,
     })
 
     right_data, right_err = parse_right_side(right_tokens)
@@ -284,8 +312,8 @@ def parse_line(line: str) -> Tuple[Optional[Dict[str, object]], Optional[Dict[st
         right_err["raw"] = line.rstrip("\n")
         right_err["right_tokens"] = " | ".join(right_tokens)
         return None, right_err
-    record.update(right_data)
 
+    record.update(right_data)
     return record, None
 
 def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, str]]]:

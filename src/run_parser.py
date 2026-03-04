@@ -3,7 +3,7 @@ from parser import parse_file, export_records_to_csv, export_errors_to_csv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-INPUT_FILE = BASE_DIR / "data" / "mock_daily_file_v2.txt"
+INPUT_FILE = BASE_DIR / "data" / "mock_daily_file_v2_test_copy.txt"
 RECORDS_OUT = BASE_DIR / "output" / "parsed_records.csv"
 ERRORS_OUT = BASE_DIR / "output" / "parsing_errors.csv"
 
