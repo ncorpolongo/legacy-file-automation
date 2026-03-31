@@ -4,17 +4,27 @@ from typing import List, Optional, Dict, Tuple
 import csv
 
 FIELDNAMES = [
-    "last_name", "first_name", "address1", "address2", "city", "state", "zip",
-    "dob_raw", "gender", "driver_license",
-    "case_number", "case_state", "case_year", "case_type", "case_seq",
-    "branch", "municipality",
-    "offense_date_raw", "offense_date",
-    "supervision_end_date_raw", "supervision_end_date",
-    "charge_code", "sentence_type", "course_length",
+    "last_name",
+    "first_name",
+    "address1",
+    "address2",
+    "city",
+    "state",
+    "zip",
+    "dob_raw",
+    "gender",
+    "driver_license",
+    "case_number",
+    "branch",
+    "municipality",
+    "offense_date",
+    "supervision_end_date",
+    "charge_code",
+    "sentence_type",
+    "course_length",
     "tail_id",
     "line_number",
 ]
-
 
 # 2+ spaces = column separators in aligned text reports
 MULTISPACE = re.compile(r"\s{2,}")
@@ -341,25 +351,23 @@ def parse_file(file_path: str) -> Tuple[List[Dict[str, object]], List[Dict[str, 
 
     return records, errors
 
-
 def export_records_to_csv(records: List[Dict[str, object]], output_path: str) -> None:
     if not records:
         return
 
-    fieldnames = list(records[0].keys())
-
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
-
 
 def export_errors_to_csv(errors: List[Dict[str, str]], output_path: str) -> None:
     if not errors:
         return
 
+    fieldnames = list(errors[0].keys())
+
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(errors)
 
